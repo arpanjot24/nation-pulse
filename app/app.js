@@ -75,7 +75,10 @@ function render() {
   $("#title").textContent = TITLES[tab];
   if (!DATA) return;
   const d = new Date(DATA.updated * 1000);
-  $("#updated").textContent = `Updated ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${ago(DATA.updated)}`;
+  const hoursOld = (Date.now() / 1000 - DATA.updated) / 3600;
+  $("#updated").textContent = `Updated ${d.toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · ${ago(DATA.updated)}`
+    + (hoursOld > 3 ? " ⚠ not refreshed recently" : "");
+  $("#updated").style.color = hoursOld > 3 ? "var(--anger)" : "";
   view.innerHTML = (DATA.busy ? `<div class="loader"></div>` : "") + { pulse, viral, memes, politics, markets, news }[tab]();
   // red dot on Markets when there's a big move from the last 24 hours
   const fresh = (DATA.markets?.analysis?.alerts || []).some((x) => Date.now() / 1000 - x.t < 86400);
