@@ -11,7 +11,7 @@ const DATA_URL = ONLINE ? "data.json" : "/api/data";
 if (ONLINE) $("#refresh").style.display = "none";
 
 const TITLES = { pulse: "Mood of the nation", viral: "Most viral today", memes: "Funniest memes",
-  politics: "Government vs opposition", news: "News narratives" };
+  politics: "Government vs opposition", markets: "Markets & money", news: "News narratives" };
 const STANCE = { pro: "Pro-government", neutral: "Independent / neutral", anti: "Anti-government" };
 const STANCE_SHORT = { pro: "Pro-govt", neutral: "Independent", anti: "Anti-govt" };
 const EMO = ["joy", "hope", "calm", "fear", "anger", "sadness"];
@@ -74,7 +74,7 @@ function render() {
   if (!DATA) return;
   const d = new Date(DATA.updated * 1000);
   $("#updated").textContent = `Updated ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${ago(DATA.updated)}`;
-  view.innerHTML = (DATA.busy ? `<div class="loader"></div>` : "") + { pulse, viral, memes, politics, news }[tab]();
+  view.innerHTML = (DATA.busy ? `<div class="loader"></div>` : "") + { pulse, viral, memes, politics, markets, news }[tab]();
   bind();
 }
 
@@ -84,13 +84,21 @@ function itemHTML(i, showStance = true) {
     <div class="t">${esc(i.title)}</div>
     ${i.original ? `<div class="orig">${esc(i.original)}</div>` : ""}
     <div class="meta">
-      ${showStance && i.stance ? `<span class="pill ${i.stance}">${STANCE_SHORT[i.stance]}</span>` : ""}
+      ${showStance && i.stance ? `<span class="pill ${i.stance}">${STANCE_SHORT[i.stance]}${i.govt ? " · " + esc(i.govt) : ""}</span>` : ""}
+      ${i.kind && i.kind !== "report" ? `<span class="tag">${i.kind === "analysis" ? "Analysis" : "Opinion"}</span>` : ""}
       <span>${esc(i.source)}</span><span>·</span><span>${ago(i.time)}</span>
       ${i.lang ? `<span class="tag">Translated from ${LANG[i.lang] || "Punjabi"}</span>` : ""}
       ${i.platform === "reddit" ? `<span class="tag">Reddit</span>` : ""}
     </div>
-    ${showStance && i.why && i.why.length ? `<div class="why">Why: <b>${esc(i.why.join(", "))}</b></div>` : ""}
+    ${showStance ? whyHTML(i) : ""}
   </a>`;
+}
+
+function whyHTML(i) {
+  if (!i.why || !i.why.length) return "";
+  return i.by === "ai"
+    ? `<div class="why"><span class="tag">AI</span> ${esc(i.why.join(", "))}</div>`
+    : `<div class="why">Keywords: <b>${esc(i.why.join(", "))}</b></div>`;
 }
 
 function stackHTML(s, labels = true) {
@@ -173,15 +181,18 @@ function pulse() {
       <div class="chips">${DATA.topics.slice(0, 12).map((t) => `<button class="chip" data-goto="news">${esc(t.word)} <b>${t.count}</b></button>`).join("")}</div>
     </div>
   </div>
-  <div class="note"><b>How the sorting works:</b> each headline is checked for wording such as "slams", "protest", "scam" (anti-government)
-  or "inaugurates", "launches", "record" (pro-government). Political posts with neither, or with both equally, count as
-  independent. Each post shows the words that decided it. This is a quick estimate, not an exact measurement.</div>
+  <div class="note"><b>How the sorting works:</b> an AI reads each headline and its summary and judges its framing:
+  <b>pro-government</b> (praises the government or attacks its critics), <b>anti-government</b> (criticises it or amplifies
+  attacks on it) or <b>independent</b> (factual, balanced or analytical). It also notes which government — the Centre or a
+  state — and gives a one-line reason, marked <span class="tag">AI</span>. Posts the AI hasn't reached yet use keyword
+  rules and show the keywords. ${esc(DATA.status?.["AI sorting"] ? "This round: AI sorted " + DATA.status["AI sorting"] + "." : "")}
+  It's an estimate of tone, not a fact-check.</div>
   ${sources()}`;
 }
 
 function sources() {
   const st = DATA.status || {};
-  const ok = Object.entries(st).filter(([k]) => !k.includes("(error)"));
+  const ok = Object.entries(st).filter(([k]) => !k.includes("(error)") && !k.startsWith("AI"));
   const bad = Object.keys(st).filter((k) => k.includes("(error)")).map((k) => k.replace(" (error)", ""));
   return `<div class="note"><b>Sources this round:</b> ${ok.map(([k, v]) => `${esc(k)} (${v})`).join(", ")}
   ${bad.length ? `<br><b>Didn't respond:</b> ${esc(bad.join(", "))} — they'll be retried next refresh.` : ""}
@@ -226,10 +237,91 @@ function politics() {
   <div class="grid three">
     ${["pro", "neutral", "anti"].map((k) => `<div class="card pol-col ${k} ${polSide === k ? "" : "hide"}">
       <div class="col-head"><h2>${STANCE[k]}</h2><span class="n">${s[k]}</span></div>
-      ${p[k].length ? p[k].map((i) => itemHTML(i, false).replace("</a>", `${i.why?.length ? `<div class="why">Why: <b>${esc(i.why.join(", "))}</b></div>` : ""}</a>`)).join("")
+      ${p[k].length ? p[k].map((i) => itemHTML(i, false).replace(/<\/a>$/, `${i.govt ? `<div class="why">About: <b>${esc(i.govt)} government</b></div>` : ""}${whyHTML(i)}</a>`)).join("")
         : `<div class="empty">Nothing here this round.</div>`}
     </div>`).join("")}
+  </div>
+  ${outlets()}`;
+}
+
+function outlets() {
+  const rows = DATA.outlets || [];
+  if (!rows.length) return "";
+  return `<div class="section-title">Who says what — tone of each outlet's political stories</div>
+  <div class="card">
+    ${rows.map((r) => `<div class="outlet">
+      <div class="oname">${esc(r.source)} <span class="muted">${r.total}</span></div>
+      ${stackHTML(r, false)}
+    </div>`).join("")}
+    <div class="legend" style="margin-top:8px">
+      <span style="--c:var(--pro)">Pro-govt</span><span style="--c:var(--neu)">Independent</span><span style="--c:var(--anti)">Anti-govt</span>
+    </div>
+    <p class="muted" style="margin-top:8px">Based only on today's headlines, so small numbers can swing a lot.</p>
   </div>`;
+}
+
+// ---------------------------------------------------------------- markets
+const fmt = (n, d = 2) => (n == null ? "–" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: d, minimumFractionDigits: d }));
+const chg = (n) => (n == null ? `<span class="muted">–</span>` : `<span class="${n > 0 ? "up" : n < 0 ? "down" : "muted"}">${n > 0 ? "▲" : n < 0 ? "▼" : ""} ${Math.abs(n).toFixed(2)}%</span>`);
+
+function spark(vals, color) {
+  if (!vals || vals.length < 2) return "";
+  const W = 120, H = 34, lo = Math.min(...vals), hi = Math.max(...vals);
+  const p = vals.map((v, i) => `${i ? "L" : "M"}${((i * W) / (vals.length - 1)).toFixed(1)},${(H - 2 - ((v - lo) / (hi - lo || 1)) * (H - 4)).toFixed(1)}`).join("");
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><path d="${p}" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+function markets() {
+  const m = DATA.markets;
+  if (!m || !m.indices?.length) return `<div class="empty">Market data didn't load this round — it will retry at the next update.</div>`;
+  const asOf = m.as_of ? new Date(m.as_of * 1000).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }) : "";
+  const b = m.breadth, t = m.news_tone || {};
+  const hist = (DATA.history || []).filter((h) => h.nifty).slice(-60);
+  return `
+  <div class="grid two">
+    <div class="card">
+      <h2>Market mood</h2><p class="muted">Last trading session${asOf ? " · " + asOf : ""}</p>
+      <div class="mood">
+        <div class="big" style="color:${m.mood.score >= 0 ? "var(--joy)" : "var(--anger)"}">${m.mood.score > 0 ? "+" : ""}${m.mood.score}</div>
+        <div><div class="label">${esc(m.mood.label)}</div><div class="muted">From Nifty's move and market-news tone</div></div>
+      </div>
+      <p style="margin:14px 0 0">${esc(m.summary)}</p>
+    </div>
+    <div class="card">
+      <h2>Breadth & news tone</h2><p class="muted">How many big stocks rose, and how market news reads</p>
+      ${b ? `<div class="bar-row"><span>Nifty 50</span><div class="track"><div class="fill" style="width:${pct(b.up, b.total)}%;background:var(--joy)"></div></div><span class="n">${b.up}/${b.total}</span></div>` : ""}
+      <div class="stack" style="margin-top:14px">
+        ${[["bullish", "var(--joy)"], ["neutral", "var(--calm)"], ["bearish", "var(--anger)"]].map(([k, c]) => {
+          const tot = (t.bullish || 0) + (t.neutral || 0) + (t.bearish || 0), p = pct(t[k] || 0, tot);
+          return p ? `<div style="width:${p}%;background:${c}">${p > 10 ? p + "%" : ""}</div>` : "";
+        }).join("")}
+      </div>
+      <div class="legend"><span style="--c:var(--joy)">Bullish ${t.bullish || 0}</span><span style="--c:var(--calm)">Neutral ${t.neutral || 0}</span><span style="--c:var(--anger)">Bearish ${t.bearish || 0}</span></div>
+    </div>
+  </div>
+  <div class="section-title">Indices, rupee & commodities</div>
+  <div class="tickers">
+    ${m.indices.map((q) => `<div class="card ticker">
+      <div class="tname">${esc(q.name)}</div>
+      <div class="tprice">${fmt(q.price)}</div>
+      <div class="trow">${chg(q.day)} <span class="muted">day</span></div>
+      ${spark(q.spark, q.three_month >= 0 ? "var(--joy)" : "var(--anger)")}
+      <div class="trow muted">1 month ${chg(q.month)}</div>
+    </div>`).join("")}
+  </div>
+  <div class="grid two" style="margin-top:14px">
+    <div class="card"><h2>Top gainers</h2><p class="muted">Nifty 50 stocks, last session</p>
+      ${(m.gainers || []).map((s) => `<div class="mover"><span>${esc(s.symbol)}</span><span class="muted">₹${fmt(s.price)}</span>${chg(s.day)}</div>`).join("")}</div>
+    <div class="card"><h2>Top losers</h2><p class="muted">Nifty 50 stocks, last session</p>
+      ${(m.losers || []).map((s) => `<div class="mover"><span>${esc(s.symbol)}</span><span class="muted">₹${fmt(s.price)}</span>${chg(s.day)}</div>`).join("")}</div>
+  </div>
+  ${hist.length > 1 ? `<div class="card" style="margin-top:14px"><h2>Nifty 50 at each update</h2><p class="muted">Builds up as the app keeps running</p>${lineChart(hist, "nifty", { color: "var(--hope)" })}</div>` : ""}
+  <div class="section-title">Market news</div>
+  <div class="card">${(m.news || []).map((n) => `<a class="item" ${link(n.url)}>
+    <div class="t">${esc(n.title)}</div>
+    <div class="meta"><span class="pill ${n.tone === "bullish" ? "bull" : n.tone === "bearish" ? "bear" : "flat"}">${esc(n.tone)}</span>
+    <span>${esc(n.source)}</span><span>·</span><span>${ago(n.time)}</span></div></a>`).join("")}</div>
+  <div class="note">Prices from Yahoo Finance (free, may be delayed). Bullish/bearish tone is based on headline wording. This is not investment advice.</div>`;
 }
 
 function news() {

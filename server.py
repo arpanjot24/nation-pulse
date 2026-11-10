@@ -33,13 +33,45 @@ UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NationPulse/1.0"}
 
 # ---------------------------------------------------------------- sources
 GN = "https://news.google.com/rss"
-NEWS_FEEDS = [
+NEWS_FEEDS = [  # (name, url) - English and Punjabi, a spread of outlets from all sides
     ("Google News India", f"{GN}?hl=en-IN&gl=IN&ceid=IN:en"),
     ("Google News India", f"{GN}/headlines/section/topic/NATION?hl=en-IN&gl=IN&ceid=IN:en"),
     ("Google News Punjabi", f"{GN}?hl=pa&gl=IN&ceid=IN:pa"),
     ("Google News India", f"{GN}/search?q=government+OR+Modi+OR+opposition+when:2d&hl=en-IN&gl=IN&ceid=IN:en"),
     ("Google News India", f"{GN}/search?q=Punjab+when:2d&hl=en-IN&gl=IN&ceid=IN:en"),
+    ("The Hindu", "https://www.thehindu.com/news/national/feeder/default.rss"),
+    ("Indian Express", "https://indianexpress.com/section/india/feed/"),
+    ("NDTV", "https://feeds.feedburner.com/ndtvnews-india-news"),
+    ("Times of India", "https://timesofindia.indiatimes.com/rssfeeds/-2128936835.cms"),
+    ("Hindustan Times", "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml"),
+    ("India Today", "https://www.indiatoday.in/rss/1206578"),
+    ("News18", "https://www.news18.com/commonfeeds/v1/eng/rss/india.xml"),
+    ("Firstpost", "https://www.firstpost.com/commonfeeds/v1/mfp/rss/india.xml"),
+    ("ThePrint", "https://theprint.in/category/politics/feed/"),
+    ("Scroll", "https://feeds.feedburner.com/ScrollinArticles.rss"),
+    ("OpIndia", "https://www.opindia.com/feed/"),
+    ("Swarajya", "https://prod-qt-images.s3.amazonaws.com/production/swarajya/feed.xml"),
+    ("The Wire", "https://thewire.in/rss"),
+    ("Hindustan Times Punjab", "https://www.hindustantimes.com/feeds/rss/cities/chandigarh-news/rssfeed.xml"),
+    ("Indian Express Punjab", "https://indianexpress.com/section/cities/chandigarh/feed/"),
+    ("Times of India Punjab", "https://timesofindia.indiatimes.com/rssfeeds/-2128816762.cms"),
 ]
+PER_FEED = 30  # newest items taken from each feed
+MARKET_NEWS_FEEDS = [
+    ("Economic Times Markets", "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"),
+    ("Livemint Markets", "https://www.livemint.com/rss/markets"),
+    ("Business Standard Markets", "https://www.business-standard.com/rss/markets-106.rss"),
+    ("Moneycontrol", "https://www.moneycontrol.com/rss/marketreports.xml"),
+]
+MARKET_INDICES = [  # Yahoo Finance symbols (free, no key)
+    ("^NSEI", "Nifty 50"), ("^BSESN", "Sensex"), ("^NSEBANK", "Bank Nifty"), ("^CNXIT", "Nifty IT"),
+    ("^INDIAVIX", "India VIX (fear gauge)"), ("INR=X", "US Dollar → Rupee"), ("GC=F", "Gold ($/oz)"),
+    ("BZ=F", "Brent crude ($/barrel)"),
+]
+NIFTY50 = """ADANIENT ADANIPORTS APOLLOHOSP ASIANPAINT AXISBANK BAJAJ-AUTO BAJFINANCE BAJAJFINSV BEL BHARTIARTL
+CIPLA COALINDIA DRREDDY EICHERMOT ETERNAL GRASIM HCLTECH HDFCBANK HDFCLIFE HEROMOTOCO HINDALCO HINDUNILVR ICICIBANK
+INDUSINDBK INFY ITC JIOFIN JSWSTEEL KOTAKBANK LT M&M MARUTI NESTLEIND NTPC ONGC POWERGRID RELIANCE SBILIFE SBIN
+SHRIRAMFIN SUNPHARMA TATACONSUM TATAMOTORS TATASTEEL TCS TECHM TITAN TRENT ULTRACEMCO WIPRO""".split()
 TRENDS_FEEDS = [("India", "IN"), ("Punjab", "IN-PB"), ("Delhi", "IN-DL"), ("Chandigarh", "IN-CH")]
 MEME_SUBS = ["IndianDankMemes", "IndianMeyMeys", "desimemes"]
 SOCIAL_SUBS = ["india", "IndiaSpeaks", "indianews", "punjab"]
@@ -209,28 +241,60 @@ def classify(item):
 
 
 # ---------------------------------------------------------------- collectors
-def collect_news(status):
-    items, seen = [], set()
-    for name, url in NEWS_FEEDS:
+def clean_text(s, n=220):
+    s = re.sub(r"<[^>]+>", " ", html.unescape(s or ""))
+    s = re.sub(r"\s+", " ", html.unescape(s)).strip()
+    return s[:n]
+
+
+OUTLET_ALIASES = {  # Google News names -> the names used for direct feeds
+    "The Times of India": "Times of India", "The Indian Express": "Indian Express",
+    "The Economic Times": "Economic Times", "NDTV.com": "NDTV", "India Today NE": "India Today",
+    "The Hindustan Times": "Hindustan Times", "News18.com": "News18", "Firstpost.com": "Firstpost",
+}
+
+
+def read_feed(name, url, per):
+    """Read one RSS feed -> list of items (newest first)."""
+    root = ET.fromstring(fetch(url))
+    out = []
+    for it in list(root.iter("item"))[:per]:
+        title = clean_text(it.findtext("title"), 300)
+        src = it.findtext("source") or ""
+        if src and title.endswith(" - " + src):
+            title = title[: -len(src) - 3]
+        summary = clean_text(it.findtext("description"))
+        if summary.lower().startswith(title.lower()[:40]) or "news.google" in url:
+            summary = ""  # Google News descriptions just repeat the headline
+        src = OUTLET_ALIASES.get(src, src)
+        out.append({"title": title, "summary": summary, "source": src or name, "platform": "news",
+                    "feed": name, "url": (it.findtext("link") or "").strip(),
+                    "time": to_ts(it.findtext("pubDate") or "")})
+    return out
+
+
+def collect_news(status, feeds=NEWS_FEEDS, per=PER_FEED):
+    def one(f):
         try:
-            root = ET.fromstring(fetch(url))
-            n = 0
-            for it in root.iter("item"):
-                title = html.unescape(it.findtext("title") or "")
-                src = it.findtext("source") or ""
-                if src and title.endswith(" - " + src):
-                    title = title[: -len(src) - 3]
-                key = re.sub(r"\W+", "", title.lower())[:80]
-                if not title or key in seen:
-                    continue
-                seen.add(key)
-                items.append({"title": title, "source": src or name, "platform": "news",
-                              "feed": name, "url": it.findtext("link"),
-                              "time": to_ts(it.findtext("pubDate") or "")})
-                n += 1
-            status[name] = status.get(name, 0) + n
+            return f[0], read_feed(f[0], f[1], per), None
         except Exception as e:
-            status[name + " (error)"] = str(e)[:80]
+            return f[0], [], str(e)[:80]
+    items, seen = [], set()
+    with ThreadPoolExecutor(8) as ex:
+        results = list(ex.map(one, feeds))
+    for name, got, err in results:
+        if err:
+            status[name + " (error)"] = err
+            continue
+        n = 0
+        for it in got:
+            key = re.sub(r"\W+", "", it["title"].lower())[:80]
+            if not it["title"] or key in seen:
+                continue
+            seen.add(key)
+            items.append(it)
+            n += 1
+        status[name] = status.get(name, 0) + n
     return items
 
 
@@ -382,6 +446,258 @@ def mood_of(items):
     return {"index": idx, "label": label, "emotions": dict(emo), "sample": len(items)}
 
 
+# ---------------------------------------------------------------- AI sorting (free GitHub Models)
+# Reads each headline's wording and framing - much better than keywords. Uses GitHub's free AI
+# models: inside GitHub Actions the built-in token works; at home it borrows the `gh` login.
+# Results are cached so each headline is only sent once. If the AI is unavailable, the keyword
+# rules above are used instead.
+AI_URL = "https://models.github.ai/inference/chat/completions"
+AI_MODELS = ["openai/gpt-4.1-mini", "openai/gpt-4o-mini", "meta/Llama-4-Scout-17B-16E-Instruct"]
+AI_BATCH = 40
+AI_MAX_CALLS = 10          # per update; free limit is ~150 calls a day
+AI_CACHE_FILE = os.path.join(HERE, "data", "ai_cache.json")
+AI_PROMPT = """You label Indian news headlines and social posts for a dashboard about the national mood.
+For each numbered item return one object:
+{"i": <number>, "stance": "pro"|"anti"|"neutral"|"none", "govt": "Centre" or a state name or "",
+ "kind": "report"|"analysis"|"opinion", "emotion": "joy"|"hope"|"calm"|"fear"|"anger"|"sadness",
+ "reason": "<why, at most 12 words>"}
+
+stance = the item's slant toward the government in power that it is about (the Union Government of
+India, or a state government when the story is about a state):
+- "pro": praises or promotes the government or ruling party, presents its actions or claims as
+  achievements without scrutiny, or attacks its critics and the opposition.
+- "anti": criticises the government or ruling party, highlights its failures, scandals or broken
+  promises, or mainly amplifies opposition or protest attacks on it.
+- "neutral": about government, politics or policy but factual, balanced, or independent analysis
+  that weighs evidence or both sides.
+- "none": not about government, politics or policy (crime, accidents, sport, weather, films,
+  business, foreign news not involving India's government).
+Judge the wording and framing only, never your own opinion of the parties.
+govt: which government the stance concerns ("" when stance is none).
+kind: "analysis" for explainers or data-led pieces, "opinion" for columns/editorials, else "report".
+emotion: the main feeling the item would cause in Indian readers.
+Return ONLY a JSON array with one object per item, no other text."""
+_ai = {"token": None, "model": None, "dead": False}
+
+
+def ai_token():
+    if _ai["token"] is None:
+        tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_MODELS_TOKEN") or ""
+        if not tok:
+            import subprocess
+            for exe in ("gh", r"C:\Program Files\GitHub CLI\gh.exe"):
+                try:
+                    tok = subprocess.run([exe, "auth", "token"], capture_output=True, text=True,
+                                         timeout=10).stdout.strip()
+                    if tok:
+                        break
+                except Exception:
+                    pass
+        _ai["token"] = tok
+    return _ai["token"]
+
+
+def ai_call(text):
+    """Send one batch to the AI; tries each model until one answers."""
+    models = [_ai["model"]] if _ai["model"] else AI_MODELS
+    last = None
+    for model in models:
+        body = {"model": model, "temperature": 0,
+                "messages": [{"role": "system", "content": AI_PROMPT}, {"role": "user", "content": text}]}
+        req = urllib.request.Request(AI_URL, data=json.dumps(body).encode("utf-8"), headers={
+            "Authorization": "Bearer " + ai_token(), "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=90) as r:
+                out = json.loads(r.read().decode("utf-8"))["choices"][0]["message"]["content"]
+            _ai["model"] = model
+            return out
+        except urllib.error.HTTPError as e:
+            last = f"{model}: HTTP {e.code} {e.read()[:150]!r}"
+            if e.code == 429:  # daily/minute limit reached - stop for this round
+                raise RuntimeError(last)
+        except Exception as e:
+            last = f"{model}: {e}"
+    raise RuntimeError(last)
+
+
+def item_key(it):
+    import hashlib
+    return hashlib.sha1(it["title"].lower().encode("utf-8")).hexdigest()[:16]
+
+
+def ai_classify(items, status):
+    """Label items with the AI (cached). Returns how many items have AI labels."""
+    try:
+        cache = json.load(open(AI_CACHE_FILE, encoding="utf-8"))
+    except Exception:
+        cache = {}
+    if ai_token() and not _ai["dead"]:
+        todo = [it for it in items if item_key(it) not in cache]
+        # likely-political and newest first, so the limited calls go where they matter
+        todo.sort(key=lambda it: (not it.get("political"), -it["time"]))
+        calls = 0
+        for start in range(0, len(todo), AI_BATCH):
+            if calls >= AI_MAX_CALLS:
+                break
+            batch = todo[start:start + AI_BATCH]
+            lines = []
+            for n, it in enumerate(batch, 1):
+                extra = f" — {it['summary'][:180]}" if it.get("summary") else ""
+                lines.append(f"{n}. {it['title']}{extra} [{it['source']}]")
+            try:
+                raw = ai_call("\n".join(lines))
+                calls += 1
+                arr = json.loads(raw[raw.index("["): raw.rindex("]") + 1])
+                for r in arr:
+                    n = int(r.get("i", 0))
+                    if 1 <= n <= len(batch) and r.get("stance") in ("pro", "anti", "neutral", "none"):
+                        cache[item_key(batch[n - 1])] = {
+                            "s": r["stance"], "g": str(r.get("govt") or "")[:30],
+                            "k": r.get("kind") if r.get("kind") in ("report", "analysis", "opinion") else "report",
+                            "e": r.get("emotion") if r.get("emotion") in EMOTIONS or r.get("emotion") == "calm" else "calm",
+                            "r": str(r.get("reason") or "")[:120], "t": int(time.time())}
+            except Exception as e:
+                status["AI sorting (error)"] = str(e)[:150]
+                if "429" in str(e) or "401" in str(e) or "403" in str(e):
+                    _ai["dead"] = "401" in str(e) or "403" in str(e)
+                    break
+            time.sleep(4)  # stay under the per-minute limit
+        week_ago = time.time() - 7 * 86400
+        cache = {k: v for k, v in cache.items() if v["t"] > week_ago}
+        try:
+            json.dump(cache, open(AI_CACHE_FILE, "w", encoding="utf-8"), ensure_ascii=False)
+        except Exception:
+            pass
+    done = 0
+    for it in items:
+        c = cache.get(item_key(it))
+        if not c:
+            it["by"] = "keywords"
+            continue
+        it.update(stance=None if c["s"] == "none" else c["s"], govt=c["g"], kind=c["k"],
+                  emotion=c["e"], why=[c["r"]] if c["r"] else [], by="ai")
+        done += 1
+    status["AI sorting"] = f"{done} of {len(items)} posts" + (f" ({_ai['model']})" if _ai["model"] else "")
+    return done
+
+
+# ---------------------------------------------------------------- markets
+BULL = [r"\bsurg", r"\brall", r"\bgain", r"\bjump", r"record high", r"\brise", r"\brises\b", r"\bsoar",
+        r"\bclimb", r"\bbull", r"\bup\b", r"\bhigher\b", r"\bupgrade", r"\bbuy\b", r"\binflow", r"\brecover"]
+BEAR = [r"\bfall", r"\bslump", r"\bcrash", r"\bdeclin", r"\bdrop", r"\bplung", r"\bslid", r"\bdown\b",
+        r"\bbear", r"sell.?off", r"\blos(e|es|ses)\b", r"\blower\b", r"\bdowngrade", r"\boutflow", r"\bwea?k",
+        r"\btumbl", r"\bsink", r"\bsell\b", r"\bpressure"]
+
+
+def yahoo(url):
+    return json.loads(fetch(url, 20).decode("utf-8"))
+
+
+def pct_change(a, b):
+    return round(100 * (a - b) / b, 2) + 0.0 if a is not None and b else None
+
+
+def index_quote(sym, name):
+    d = yahoo("https://query1.finance.yahoo.com/v8/finance/chart/" + urllib.parse.quote(sym)
+              + "?range=3mo&interval=1d")["chart"]["result"][0]
+    pts = [(t, c) for t, c in zip(d.get("timestamp") or [], d["indicators"]["quote"][0].get("close") or []) if c]
+    while len(pts) > 2 and abs(pts[-1][1] - pts[-2][1]) < 1e-9:
+        pts.pop()  # holidays repeat the last close - ignore those bars
+    closes = [c for _, c in pts]
+    last = d["meta"].get("regularMarketPrice") or closes[-1]
+    prev = closes[-2] if len(closes) > 1 else None
+    if abs(closes[-1] - last) > 1e-6 * last:
+        prev = closes[-1]  # today's bar not in the series yet
+    return {"symbol": sym, "name": name, "price": round(last, 2),
+            "day": pct_change(last, prev),
+            "month": pct_change(last, closes[-22] if len(closes) > 22 else closes[0]),
+            "three_month": pct_change(last, closes[0]),
+            "spark": [round(c, 2) for c in closes[-60:]],
+            "as_of": pts[-1][0] if pts else None}
+
+
+def collect_markets(status):
+    out = {"indices": [], "gainers": [], "losers": [], "breadth": None, "news": [], "summary": ""}
+    with ThreadPoolExecutor(6) as ex:
+        futs = {ex.submit(index_quote, s, n): n for s, n in MARKET_INDICES}
+        for f, n in futs.items():
+            try:
+                out["indices"].append(f.result())
+            except Exception as e:
+                status[f"Market {n} (error)"] = str(e)[:80]
+    order = [n for _, n in MARKET_INDICES]
+    out["indices"].sort(key=lambda q: order.index(q["name"]))
+    # Nifty 50 movers
+    movers = []
+    syms = [s + ".NS" for s in NIFTY50]
+    for i in range(0, len(syms), 20):
+        try:
+            res = yahoo("https://query1.finance.yahoo.com/v7/finance/spark?range=5d&interval=1d&symbols="
+                        + urllib.parse.quote(",".join(syms[i:i + 20])))["spark"]["result"]
+            for r in res:
+                resp = (r.get("response") or [{}])[0]
+                closes = [c for c in (resp.get("indicators", {}).get("quote", [{}])[0].get("close") or []) if c]
+                last = resp.get("meta", {}).get("regularMarketPrice") or (closes[-1] if closes else None)
+                prev = closes[-2] if len(closes) > 1 else None
+                if closes and last and abs(closes[-1] - last) > 1e-9:
+                    prev = closes[-1]
+                ch = pct_change(last, prev)
+                if ch is not None:
+                    movers.append({"symbol": r["symbol"].replace(".NS", ""), "price": round(last, 2), "day": ch})
+        except Exception as e:
+            status["Market movers (error)"] = str(e)[:80]
+    movers.sort(key=lambda m: -m["day"])
+    out["gainers"] = movers[:5]
+    out["losers"] = movers[::-1][:5]
+    if movers:
+        out["breadth"] = {"up": sum(m["day"] > 0 for m in movers), "down": sum(m["day"] < 0 for m in movers),
+                          "total": len(movers)}
+    status["Market prices"] = len(out["indices"]) + len(movers)
+    # market news + tone
+    news = collect_news(status, MARKET_NEWS_FEEDS, 15)
+    bull = bear = 0
+    for it in news:
+        t = it["title"].lower()
+        b, s = len(hits(BULL, t)), len(hits(BEAR, t))
+        it["tone"] = "bullish" if b > s else "bearish" if s > b else "neutral"
+        bull += it["tone"] == "bullish"
+        bear += it["tone"] == "bearish"
+    out["news"] = sorted(news, key=lambda x: -x["time"])[:40]
+    out["news_tone"] = {"bullish": bull, "bearish": bear, "neutral": len(news) - bull - bear}
+    # one-line summary
+    idx = {q["name"]: q for q in out["indices"]}
+    parts = []
+    for n in ("Nifty 50", "Sensex"):
+        q = idx.get(n)
+        if q and q["day"] is not None:
+            parts.append(f"{n} {'up' if q['day'] >= 0 else 'down'} {abs(q['day'])}% at {q['price']:,.0f}")
+    if out["breadth"]:
+        parts.append(f"{out['breadth']['up']} of {out['breadth']['total']} Nifty stocks rose")
+    q = idx.get("US Dollar → Rupee")
+    if q:
+        parts.append(f"rupee at {q['price']:.2f} per dollar")
+    out["summary"] = "; ".join(parts) + "." if parts else ""
+    nifty = idx.get("Nifty 50")
+    score = (nifty["day"] if nifty and nifty["day"] is not None else 0) * 40 + \
+        (100 * (bull - bear) / max(1, bull + bear)) * 0.5
+    out["mood"] = {"score": max(-100, min(100, round(score))),
+                   "label": "Bullish" if score > 15 else "Bearish" if score < -15 else "Flat / cautious"}
+    if nifty and nifty.get("as_of"):
+        out["as_of"] = nifty["as_of"]
+    return out
+
+
+def outlet_table(items, n=16):
+    by = {}
+    for it in items:
+        if it.get("stance") and it["platform"] == "news":
+            by.setdefault(it["source"], Counter())[it["stance"]] += 1
+    rows = [{"source": s, "pro": c["pro"], "neutral": c["neutral"], "anti": c["anti"],
+             "total": sum(c.values())} for s, c in by.items()]
+    rows.sort(key=lambda r: -r["total"])
+    return [r for r in rows if r["total"] >= 2][:n]
+
+
 # ---------------------------------------------------------------- main build
 _lock = threading.Lock()
 STATE = {"data": None, "busy": False}
@@ -389,16 +705,19 @@ STATE = {"data": None, "busy": False}
 
 def build():
     status, t0 = {}, time.time()
-    with ThreadPoolExecutor(3) as ex:
+    with ThreadPoolExecutor(4) as ex:
         f_news = ex.submit(collect_news, status)
         f_trends = ex.submit(collect_trends, status)
         f_reddit = ex.submit(collect_reddit_all, status)
+        f_markets = ex.submit(collect_markets, status)
         news = f_news.result()
         trends = f_trends.result()
         memes, social = f_reddit.result()
+        markets = f_markets.result()
 
-    news = [classify(i) for i in translate_items(news)]
+    news = [classify(i) for i in translate_items(news)]   # keyword rules first (backup)
     social = [classify(i) for i in translate_items(social)]
+    ai_classify(news + social, status)                       # AI labels replace them where available
     memes = translate_items([m for m in memes if m.get("image")])
     memes.sort(key=lambda m: m["rank"])  # Reddit's own "top today" order
     trends = translate_items(trends)
@@ -423,8 +742,13 @@ def build():
         "political": {k: sorted([i for i in political if i["stance"] == k], key=lambda x: -x["time"])[:60]
                       for k in ("pro", "neutral", "anti")},
         "topics": topics(news),
-        "news": sorted(news, key=lambda x: -x["time"])[:120],
+        "news": sorted(news, key=lambda x: -x["time"])[:200],
+        "outlets": outlet_table(news),
+        "markets": markets,
     }
+    for lst in (data["news"], *data["political"].values()):
+        for it in lst:
+            it.pop("summary", None)  # keep the file small
     # history for the trend chart
     hist = []
     if os.path.exists(HISTORY_FILE):
@@ -432,7 +756,9 @@ def build():
             hist = json.load(open(HISTORY_FILE, encoding="utf-8"))
         except Exception:
             hist = []
-    hist.append({"t": data["updated"], "mood": mood["index"], **data["stance"], "emotions": mood["emotions"]})
+    nifty = next((q for q in markets["indices"] if q["name"] == "Nifty 50"), None)
+    hist.append({"t": data["updated"], "mood": mood["index"], **data["stance"], "emotions": mood["emotions"],
+                 "nifty": nifty["price"] if nifty else None, "market": markets.get("mood", {}).get("score")})
     hist = hist[-500:]
     data["history"] = hist
     os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)

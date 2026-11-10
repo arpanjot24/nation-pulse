@@ -13,6 +13,7 @@ permissions:
   contents: write   # save the mood history back to the repo
   pages: write
   id-token: write
+  models: read      # free GitHub AI models for sorting headlines
 
 concurrency:
   group: nation-pulse
@@ -34,6 +35,8 @@ jobs:
 
       - name: Collect, translate and sort posts
         run: python server.py --once
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Save history (keeps the trend charts going)
         run: |
