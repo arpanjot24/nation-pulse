@@ -150,6 +150,41 @@ main { padding: 0 16px calc(84px + env(safe-area-inset-bottom)); max-width: 1200
 .topic .heads { margin-top: 10px; display: none; }
 .topic.open .heads { display: block; }
 
+/* ---------- stock analysis ---------- */
+.nav button { position: relative; }
+.nav button.badge::after { content: ""; position: absolute; top: 6px; right: calc(50% - 16px); width: 8px; height: 8px;
+  border-radius: 50%; background: var(--anger); box-shadow: 0 0 0 2px var(--nav); }
+@media (min-width: 1024px) { .nav button.badge::after { right: 12px; top: 50%; transform: translateY(-50%); } }
+.alert { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; padding: 9px 0; border-top: 1px solid var(--line); }
+.alert:first-child { border-top: 0; padding-top: 0; }
+.alert .big-ic { font-size: 18px; }
+.alert.pos .t { color: var(--joy); font-weight: 600; }
+.alert.neg .t { color: var(--anger); font-weight: 600; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; text-align: center; }
+.stats .sv { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.stats .sl { font-size: 11px; color: var(--muted); }
+.ptable { display: grid; font-size: 13px; }
+.prow { display: grid; grid-template-columns: 1.1fr .9fr 1.4fr 1fr; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); align-items: center; }
+.prow.phead { border-top: 0; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding-top: 0; }
+.prow > :last-child { text-align: right; }
+.stock { cursor: pointer; }
+.shead { display: flex; justify-content: space-between; gap: 10px; }
+.sname { font-weight: 800; font-size: 16px; }
+.sprice { font-weight: 700; font-variant-numeric: tabular-nums; }
+.scores { margin-top: 10px; display: grid; gap: 2px; }
+.sbar { display: grid; grid-template-columns: 86px 1fr 28px; gap: 8px; align-items: center; font-size: 12px; }
+.sbar .track { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; }
+.sbar .fill { height: 100%; border-radius: 99px; }
+.sbar .n { text-align: right; font-weight: 800; }
+.slabel { font-size: 11px; margin: -2px 0 4px 94px; }
+.sdetail { display: none; margin-top: 10px; }
+.stock.open .sdetail { display: block; }
+.stock.open .more { display: none; }
+.more { font-size: 11px; margin-top: 6px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12px; margin: 6px 0 8px; }
+.kv span { color: var(--muted); }
+.kv b { text-align: right; font-weight: 600; }
+
 /* ---------- social posts ---------- */
 .social { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
 .social:first-of-type { border-top: 0; }

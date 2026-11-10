@@ -845,6 +845,12 @@ def build():
         memes, social = f_reddit.result()
         markets = f_markets.result()
         three_days = time.time() - 3 * 86400
+        nifty_q = next((q for q in markets["indices"] if q["name"] == "Nifty 50"), None)
+        try:
+            import analysis
+            markets["analysis"] = analysis.run(NIFTY50, status, nifty_q["price"] if nifty_q else None)
+        except Exception as e:
+            status["Stock analysis (error)"] = str(e)[:120]
         apify_posts = [dict(p) for p in f_apify.result()
                        if p["time"] > three_days and not re.search(EXPLICIT, p["title"].lower())]
 

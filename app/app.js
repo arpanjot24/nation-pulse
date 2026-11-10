@@ -77,6 +77,9 @@ function render() {
   const d = new Date(DATA.updated * 1000);
   $("#updated").textContent = `Updated ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${ago(DATA.updated)}`;
   view.innerHTML = (DATA.busy ? `<div class="loader"></div>` : "") + { pulse, viral, memes, politics, markets, news }[tab]();
+  // red dot on Markets when there's a big move from the last 24 hours
+  const fresh = (DATA.markets?.analysis?.alerts || []).some((x) => Date.now() / 1000 - x.t < 86400);
+  document.querySelector('#nav [data-tab="markets"]').classList.toggle("badge", fresh);
   bind();
 }
 
@@ -336,13 +339,117 @@ function markets() {
     <div class="card"><h2>Top losers</h2><p class="muted">Nifty 50 stocks, last session</p>
       ${(m.losers || []).map((s) => `<div class="mover"><span>${esc(s.symbol)}</span><span class="muted">₹${fmt(s.price)}</span>${chg(s.day)}</div>`).join("")}</div>
   </div>
+  ${analysisHTML(m.analysis)}
   ${hist.length > 1 ? `<div class="card" style="margin-top:14px"><h2>Nifty 50 at each update</h2><p class="muted">Builds up as the app keeps running</p>${lineChart(hist, "nifty", { color: "var(--hope)" })}</div>` : ""}
   <div class="section-title">Market news</div>
   <div class="card">${(m.news || []).map((n) => `<a class="item" ${link(n.url)}>
     <div class="t">${esc(n.title)}</div>
     <div class="meta"><span class="pill ${n.tone === "bullish" ? "bull" : n.tone === "bearish" ? "bear" : "flat"}">${esc(n.tone)}</span>
     <span>${esc(n.source)}</span><span>·</span><span>${ago(n.time)}</span></div></a>`).join("")}</div>
-  <div class="note">Prices from Yahoo Finance (free, may be delayed). Bullish/bearish tone is based on headline wording. This is not investment advice.</div>`;
+  <div class="note">Prices and company figures from Yahoo Finance (free, may be delayed). Bullish/bearish tone is based on headline
+  wording. Scores, the watchlist and alerts come from fixed rules, not a person's judgement. <b>This is not investment advice</b> —
+  for real money decisions, talk to a SEBI-registered adviser.</div>`;
+}
+
+// ---------------------------------------------------------------- stock analysis
+let stockSort = "combined";
+const scoreColor = (s) => (s >= 70 ? "var(--joy)" : s >= 50 ? "var(--hope)" : s >= 35 ? "var(--fear)" : "var(--anger)");
+const pctv = (v) => (v == null ? "–" : (v * 100).toFixed(1) + "%");
+
+function analysisHTML(a) {
+  if (!a || !a.stocks?.length) return "";
+  const recentAlerts = (a.alerts || []).filter((x) => Date.now() / 1000 - x.t < 3 * 86400)
+    .sort((p, q) => (q.kind.startsWith("pick") - p.kind.startsWith("pick")) || Math.abs(q.size) - Math.abs(p.size)).slice(0, 6);
+  const rec = a.record;
+  const sorted = [...a.stocks].sort((x, y) =>
+    stockSort === "tech" ? y.tech.score - x.tech.score : stockSort === "fund" ? (y.fund?.score ?? -1) - (x.fund?.score ?? -1)
+    : stockSort === "day" ? (y.tech.r1d ?? 0) - (x.tech.r1d ?? 0) : y.combined - x.combined);
+  return `
+  <div class="section-title" id="big-moves">⚡ Big moves</div>
+  <div class="card">
+    ${recentAlerts.length ? recentAlerts.map((x) => `<div class="alert ${x.size >= 0 ? "pos" : "neg"}">
+        <span class="big-ic">${x.kind === "volume" ? "📊" : x.size >= 0 ? "🚀" : "📉"}</span>
+        <div><div class="t">${esc(x.text)}</div><div class="muted" style="font-size:12px">${esc(x.date)}</div></div></div>`).join("")
+      : `<div class="muted">No unusually big moves in the last 3 days. Alerts appear here when a Nifty 50 stock moves ±4% in a day,
+         ±10% in a week, trades 3× its usual volume, or a watchlist pick gains 15% / loses 10%.</div>`}
+  </div>
+
+  <div class="section-title">Signal watchlist — saved and tracked</div>
+  <div class="grid two">
+    <div class="card">
+      <h2>Track record</h2><p class="muted">Every stock the rules have picked, priced from the day it was picked</p>
+      ${rec ? `<div class="stats">
+          <div><div class="sv ${rec.avg >= 0 ? "up" : "down"}">${rec.avg >= 0 ? "+" : ""}${rec.avg}%</div><div class="sl">average return</div></div>
+          <div><div class="sv">${rec.win_rate}%</div><div class="sl">picks in profit</div></div>
+          <div><div class="sv ${(rec.avg_vs_nifty ?? 0) >= 0 ? "up" : "down"}">${rec.avg_vs_nifty == null ? "–" : (rec.avg_vs_nifty >= 0 ? "+" : "") + rec.avg_vs_nifty + "%"}</div><div class="sl">vs Nifty 50</div></div>
+          <div><div class="sv">${rec.count}</div><div class="sl">picks tracked</div></div>
+        </div>
+        <p class="muted" style="margin:10px 0 0;font-size:12px">Best: ${esc(rec.best.name)} ${rec.best.ret >= 0 ? "+" : ""}${rec.best.ret}% ·
+        Worst: ${esc(rec.worst.name)} ${rec.worst.ret >= 0 ? "+" : ""}${rec.worst.ret}%</p>`
+        : `<div class="muted">The first picks are saved at the next update.</div>`}
+    </div>
+    <div class="card">
+      <h2>How picks are chosen</h2>
+      <p class="muted" style="margin:0">Once a day, the top 5 Nifty 50 stocks where <b>both</b> the technical and fundamental
+      scores are 60 or more, skipping overbought stocks (RSI above 75) and anything picked in the last 7 days. The price that
+      day is saved, then tracked against the Nifty 50. It's a test of the rules, not advice to buy.</p>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    ${(a.picks || []).length ? `<div class="ptable">
+      <div class="prow phead"><span>Stock</span><span>Picked</span><span>Then → now</span><span>Return</span></div>
+      ${a.picks.map((p) => `<div class="prow">
+        <span><b>${esc(p.symbol)}</b><br><span class="muted" style="font-size:11px">T ${p.tech} · F ${p.fund}</span></span>
+        <span class="muted">${esc(p.date)}</span>
+        <span>₹${fmt(p.price, 0)} → ₹${fmt(p.now ?? p.price, 0)}</span>
+        <span>${chg(p.ret ?? 0)}${p.excess != null ? `<br><span class="muted" style="font-size:11px">${p.excess >= 0 ? "+" : ""}${p.excess}% vs Nifty</span>` : ""}</span>
+      </div>`).join("")}</div>` : `<div class="muted">No picks yet.</div>`}
+  </div>
+
+  <div class="section-title">Stock analysis — Nifty 50</div>
+  <div class="chips" style="margin-bottom:12px">
+    ${[["combined", "Overall"], ["tech", "Technical"], ["fund", "Fundamental"], ["day", "Today's move"]].map(([k, l]) =>
+      `<button class="chip ${stockSort === k ? "on" : ""}" data-sort="${k}">${l}</button>`).join("")}
+  </div>
+  <div class="grid auto">
+    ${sorted.map((x) => `<div class="card stock" data-stock>
+      <div class="shead">
+        <div><div class="sname">${esc(x.symbol)}</div><div class="muted" style="font-size:12px">${esc(x.name)}${x.sector ? " · " + esc(x.sector) : ""}</div></div>
+        <div style="text-align:right"><div class="sprice">₹${fmt(x.tech.price)}</div>${chg(x.tech.r1d)}</div>
+      </div>
+      <div class="scores">
+        ${scoreBar("Technical", x.tech.score, x.tech.label)}
+        ${x.fund ? scoreBar("Fundamental", x.fund.score, x.fund.label) : `<div class="muted" style="font-size:12px">Fundamentals unavailable</div>`}
+      </div>
+      <div class="sdetail">
+        ${spark(x.tech.spark, (x.tech.r3m ?? 0) >= 0 ? "var(--joy)" : "var(--anger)")}
+        <div class="kv">
+          <span>RSI (14)</span><b>${x.tech.rsi ?? "–"}</b>
+          <span>50 / 200-day avg</span><b>₹${fmt(x.tech.sma50, 0)} / ₹${fmt(x.tech.sma200, 0)}</b>
+          <span>MACD</span><b>${esc(x.tech.macd)}</b>
+          <span>1m / 3m / 6m</span><b>${chg(x.tech.r1m)} ${chg(x.tech.r3m)} ${chg(x.tech.r6m)}</b>
+          <span>52-week range</span><b>₹${fmt(x.tech.lo52, 0)} – ₹${fmt(x.tech.hi52, 0)}</b>
+          <span>Volatility (yearly)</span><b>${x.tech.volatility ?? "–"}%</b>
+          <span>P/E · P/B</span><b>${x.facts.pe ? x.facts.pe.toFixed(1) : "–"} · ${x.facts.pb ? x.facts.pb.toFixed(1) : "–"}</b>
+          <span>ROE · margin</span><b>${pctv(x.facts.roe)} · ${pctv(x.facts.margin)}</b>
+          <span>Revenue · earnings growth</span><b>${pctv(x.facts.rev_growth)} · ${pctv(x.facts.eps_growth)}</b>
+          <span>Debt / equity</span><b>${x.facts.de != null ? (x.facts.de / 100).toFixed(2) : "–"}</b>
+          <span>Dividend yield</span><b>${pctv(x.facts.div_yield)}</b>
+          ${x.facts.analyst ? `<span>Analysts' consensus</span><b>${esc(x.facts.analyst.replace("_", " "))}${x.facts.target ? ` · target ₹${fmt(x.facts.target, 0)}` : ""}</b>` : ""}
+        </div>
+        <div class="why"><b>Technical:</b> ${esc(x.tech.notes.join(", "))}</div>
+        ${x.fund ? `<div class="why"><b>Fundamental:</b> ${esc(x.fund.notes.join(", "))}</div>` : ""}
+      </div>
+      <div class="more muted">Tap for details</div>
+    </div>`).join("")}
+  </div>
+  <p class="muted" style="font-size:12px">Technical score (0–100): trend vs 50/200-day averages, MACD, momentum, RSI, distance from 52-week high.
+  Fundamental score (0–100): ROE, profit margin, revenue & earnings growth, debt, and P/E compared with the Nifty median${a.median_pe ? ` (${a.median_pe})` : ""}.</p>`;
+}
+
+function scoreBar(label, s, word) {
+  return `<div class="sbar"><span>${label}</span><div class="track"><div class="fill" style="width:${s}%;background:${scoreColor(s)}"></div></div>
+    <span class="n" style="color:${scoreColor(s)}">${s}</span></div><div class="slabel" style="color:${scoreColor(s)}">${esc(word)}</div>`;
 }
 
 function news() {
@@ -369,6 +476,8 @@ function bind() {
   view.querySelectorAll("[data-side]").forEach((b) => (b.onclick = () => { polSide = b.dataset.side; render(); }));
   view.querySelectorAll("[data-filter]").forEach((b) => (b.onclick = () => { newsFilter = b.dataset.filter; render(); }));
   view.querySelectorAll("[data-topic]").forEach((c) => (c.onclick = (e) => { if (!e.target.closest("a")) c.classList.toggle("open"); }));
+  view.querySelectorAll("[data-sort]").forEach((b) => (b.onclick = () => { stockSort = b.dataset.sort; render(); }));
+  view.querySelectorAll("[data-stock]").forEach((c) => (c.onclick = () => c.classList.toggle("open")));
   view.querySelectorAll("[data-goto]").forEach((b) => (b.onclick = () => document.querySelector(`#nav button[data-tab="${b.dataset.goto}"]`).click()));
 }
 
