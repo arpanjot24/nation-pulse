@@ -47,6 +47,11 @@ jobs:
           git diff --cached --quiet || git commit -m "Update data $(date -u +'%Y-%m-%d %H:%M')"
           git push || echo "push skipped"
 
+      - name: Make phones load the newest app files
+        run: |
+          v=${GITHUB_SHA::7}
+          sed -i "s/app\.js\"/app.js?v=$v\"/; s/style\.css\"/style.css?v=$v\"/" app/index.html
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
