@@ -36,12 +36,11 @@ GN = "https://news.google.com/rss"
 NEWS_FEEDS = [
     ("Google News India", f"{GN}?hl=en-IN&gl=IN&ceid=IN:en"),
     ("Google News India", f"{GN}/headlines/section/topic/NATION?hl=en-IN&gl=IN&ceid=IN:en"),
-    ("Google News Hindi", f"{GN}?hl=hi&gl=IN&ceid=IN:hi"),
     ("Google News Punjabi", f"{GN}?hl=pa&gl=IN&ceid=IN:pa"),
     ("Google News India", f"{GN}/search?q=government+OR+Modi+OR+opposition+when:2d&hl=en-IN&gl=IN&ceid=IN:en"),
     ("Google News India", f"{GN}/search?q=Punjab+when:2d&hl=en-IN&gl=IN&ceid=IN:en"),
 ]
-TRENDS_FEED = "https://trends.google.com/trending/rss?geo=IN"
+TRENDS_FEEDS = [("India", "IN"), ("Punjab", "IN-PB"), ("Delhi", "IN-DL"), ("Chandigarh", "IN-CH")]
 MEME_SUBS = ["IndianDankMemes", "IndianMeyMeys", "desimemes"]
 SOCIAL_SUBS = ["india", "IndiaSpeaks", "indianews", "punjab"]
 
@@ -95,7 +94,14 @@ india indian india's news live updates today day year years first one two three 
 check latest top week report big set get gets make makes take takes back now still being under against
 while during within near via per mr ms dr vs ji yet top news""".split())
 
-NON_LATIN = re.compile(r"[ऀ-ॿ਀-੿]")  # Devanagari (Hindi) + Gurmukhi (Punjabi)
+# Only English and Punjabi are kept. Punjabi (Gurmukhi script) is translated to English;
+# anything in another Indian script (Hindi, Tamil, Telugu, Kannada, Malayalam, Bengali, ...) is dropped.
+NON_LATIN = re.compile(r"[਀-੿]")  # Gurmukhi (Punjabi)
+OTHER_INDIC = re.compile(r"[ऀ-৿઀-෿]")
+
+
+def lang_ok(text):
+    return bool(text) and not OTHER_INDIC.search(text)
 
 # ---------------------------------------------------------------- helpers
 def fetch(url, timeout=20):
@@ -229,28 +235,42 @@ def collect_news(status):
 
 
 def collect_trends(status):
+    """Top Google searches for India, Punjab, Delhi and Chandigarh - English/Punjabi only."""
     ns = {"ht": "https://trends.google.com/trending/rss"}
-    out = []
-    try:
-        root = ET.fromstring(fetch(TRENDS_FEED))
+    merged = {}
+    for region, geo in TRENDS_FEEDS:
+        try:
+            root = ET.fromstring(fetch("https://trends.google.com/trending/rss?geo=" + geo))
+        except Exception as e:
+            status[f"Google Trends {region} (error)"] = str(e)[:80]
+            continue
+        kept = 0
         for it in root.iter("item"):
+            title = it.findtext("title") or ""
+            all_news = [{"title": html.unescape(ni.findtext("ht:news_item_title", "", ns)),
+                         "url": ni.findtext("ht:news_item_url", "", ns),
+                         "source": ni.findtext("ht:news_item_source", "", ns)}
+                        for ni in it.findall("ht:news_item", ns)]
+            news = [n for n in all_news if lang_ok(n["title"])]
+            # skip searches in other languages, or whose coverage is only in other languages
+            if not lang_ok(title) or (all_news and not news):
+                continue
             traffic = it.findtext("ht:approx_traffic", "", ns)
-            news = []
-            for ni in it.findall("ht:news_item", ns):
-                news.append({"title": html.unescape(ni.findtext("ht:news_item_title", "", ns)),
-                             "url": ni.findtext("ht:news_item_url", "", ns),
-                             "source": ni.findtext("ht:news_item_source", "", ns)})
             num = int(re.sub(r"\D", "", traffic) or 0)
-            out.append({"title": it.findtext("title"), "traffic": traffic, "traffic_num": num,
-                        "image": it.findtext("ht:picture", "", ns), "news": news[:3],
-                        "platform": "search", "source": "Google Trends",
-                        "url": "https://trends.google.com/trends/explore?geo=IN&q="
-                               + urllib.parse.quote(it.findtext("title") or ""),
-                        "time": to_ts(it.findtext("pubDate") or "")})
-        status["Google Trends"] = len(out)
-    except Exception as e:
-        status["Google Trends (error)"] = str(e)[:80]
-    out.sort(key=lambda x: -x["traffic_num"])
+            key = title.lower().strip()
+            if key in merged:
+                merged[key]["regions"].append(region)
+                if num > merged[key]["traffic_num"]:
+                    merged[key].update(traffic=traffic, traffic_num=num)
+                continue
+            merged[key] = {"title": title, "traffic": traffic, "traffic_num": num, "regions": [region],
+                           "image": it.findtext("ht:picture", "", ns), "news": news[:3],
+                           "platform": "search", "source": "Google Trends",
+                           "url": f"https://trends.google.com/trends/explore?geo={geo}&q=" + urllib.parse.quote(title),
+                           "time": to_ts(it.findtext("pubDate") or "")}
+            kept += 1
+        status[f"Google Trends {region}"] = kept
+    out = sorted(merged.values(), key=lambda x: (-x["traffic_num"], -len(x["regions"])))
     return out
 
 
@@ -318,10 +338,11 @@ def collect_reddit(sub, status, sort="top", limit=25):
 
 
 def translate_items(items):
+    items = [it for it in items if lang_ok(it.get("title"))]  # English + Punjabi only
     def work(it):
         eng, lang = translate(it["title"])
         if lang:
-            it["original"], it["lang"] = it["title"], ("pa" if re.search(r"[਀-੿]", it["title"]) else "hi")
+            it["original"], it["lang"] = it["title"], "pa"
             it["title"] = eng
         return it
     with ThreadPoolExecutor(8) as ex:
@@ -381,6 +402,9 @@ def build():
     memes = translate_items([m for m in memes if m.get("image")])
     memes.sort(key=lambda m: m["rank"])  # Reddit's own "top today" order
     trends = translate_items(trends)
+    for t in trends:  # translate Punjabi coverage headlines too
+        for n in t["news"]:
+            n["title"] = translate(n["title"])[0] or n["title"]
 
     everything = news + social
     political = [i for i in everything if i["stance"]]

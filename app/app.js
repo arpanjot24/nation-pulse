@@ -86,7 +86,7 @@ function itemHTML(i, showStance = true) {
     <div class="meta">
       ${showStance && i.stance ? `<span class="pill ${i.stance}">${STANCE_SHORT[i.stance]}</span>` : ""}
       <span>${esc(i.source)}</span><span>·</span><span>${ago(i.time)}</span>
-      ${i.lang ? `<span class="tag">Translated from ${LANG[i.lang] || "Hindi"}</span>` : ""}
+      ${i.lang ? `<span class="tag">Translated from ${LANG[i.lang] || "Punjabi"}</span>` : ""}
       ${i.platform === "reddit" ? `<span class="tag">Reddit</span>` : ""}
     </div>
     ${showStance && i.why && i.why.length ? `<div class="why">Why: <b>${esc(i.why.join(", "))}</b></div>` : ""}
@@ -192,11 +192,11 @@ function viral() {
   const tr = DATA.viral || [], rd = DATA.reddit_top || [];
   return `<div class="grid two">
     <div class="card">
-      <h2>Top Google searches in India</h2><p class="muted">What people are searching right now, by search volume</p>
+      <h2>Top Google searches</h2><p class="muted">India, Punjab, Delhi and Chandigarh — English and Punjabi only</p>
       ${tr.length ? tr.map((t, n) => `<a class="trend" ${link(t.news[0]?.url || t.url)}>
         <div class="rank">${n + 1}</div>
         <div><div class="t" style="font-weight:700">${esc(t.title)}</div>
-          <div class="traffic">${esc(t.traffic)} searches</div>
+          <div class="traffic">${esc(t.traffic)} searches <span class="tag">${esc((t.regions || ["India"]).join(", "))}</span>${t.lang ? ` <span class="tag">Translated from Punjabi</span>` : ""}</div>
           ${t.news[0] ? `<div class="rel">${esc(t.news[0].title)} — ${esc(t.news[0].source)}</div>` : ""}</div>
         ${t.image ? `<img src="${esc(t.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : "<span></span>"}
       </a>`).join("") : `<div class="empty">No trends this round.</div>`}
