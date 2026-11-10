@@ -701,6 +701,7 @@ def collect_markets(status):
 # Apify gives $5 of free usage a month. We scrape once a day, small amounts (~$3.25/month),
 # and stop completely once the month's usage passes APIFY_BUDGET_USD.
 APIFY_BUDGET_USD = 4.50
+EXPLICIT = r"\b(porn\w*|nsfw|nude\w*|sex\w*|xxx|onlyfans|fuck\w*|chut\w*|bhosd\w*|madarchod|behenchod|randi)\b"
 SOCIAL_EVERY_HOURS = 22
 SOCIAL_CACHE_FILE = os.path.join(HERE, "data", "social_cache.json")
 APIFY_JOBS = [
@@ -798,7 +799,10 @@ def collect_social(status):
         try:
             path = (f"acts/{job['actor']}/run-sync-get-dataset-items?timeout=240"
                     f"&maxTotalChargeUsd={job['max_usd']}&maxItems=60")
-            rows = apify(path, token, job["input"], timeout=300)
+            inp = dict(job["input"])
+            if job["platform"] == "x":  # only the last 2 days
+                inp["since_time"] = str(int(time.time()) - 2 * 86400)
+            rows = apify(path, token, inp, timeout=300)
             got = [x for x in (social_item(job, r) for r in rows if isinstance(r, dict) and not r.get("error")) if x]
             items += got
             status[job["name"]] = len(got)
@@ -840,7 +844,9 @@ def build():
         trends = f_trends.result()
         memes, social = f_reddit.result()
         markets = f_markets.result()
-        apify_posts = [dict(p) for p in f_apify.result()]
+        three_days = time.time() - 3 * 86400
+        apify_posts = [dict(p) for p in f_apify.result()
+                       if p["time"] > three_days and not re.search(EXPLICIT, p["title"].lower())]
 
     news = [classify(i) for i in translate_items(news)]   # keyword rules first (backup)
     big3 = translate_items([p for p in apify_posts if not p.get("meme")])
