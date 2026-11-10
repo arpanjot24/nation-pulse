@@ -146,6 +146,7 @@ function pulse() {
     return { t: h.t, anti: Math.round((100 * h.anti) / t), pro: Math.round((100 * h.pro) / t) };
   });
   return `
+  ${briefHTML()}
   <div class="grid two">
     <div class="card">
       <h2>Overall mood</h2><p class="muted">From ${m.sample} news headlines and social posts</p>
@@ -193,6 +194,49 @@ function pulse() {
   rules and show the keywords. ${esc(DATA.status?.["AI sorting"] ? "This round: AI sorted " + DATA.status["AI sorting"] + "." : "")}
   It's an estimate of tone, not a fact-check.</div>
   ${sources()}`;
+}
+
+// ---------------------------------------------------------------- today's brief (summary on the front page)
+function briefHTML() {
+  const d = DATA, lines = [];
+  const m = d.mood, emo = Object.entries(m.emotions || {}).filter(([k]) => k !== "calm").sort((a, b) => b[1] - a[1]);
+  const tops = (d.topics || []).slice(0, 3).map((t) => t.word);
+  const feel = emo.length ? EMO_LABEL[emo[0][0]].toLowerCase() + (emo[1] ? " and " + EMO_LABEL[emo[1][0]].toLowerCase() : "") : "calm";
+  lines.push(["🧭", `Mood is <b>${esc(m.label.toLowerCase())}</b> (${m.index > 0 ? "+" : ""}${m.index}). Strongest feelings: ${esc(feel)}.`]);
+  if (tops.length) lines.push(["📰", `Most talked-about: <b>${tops.map((w) => esc(w[0].toUpperCase() + w.slice(1))).join(", ")}</b>.`]);
+
+  const s = d.stance, tot = s.pro + s.neutral + s.anti;
+  if (tot) {
+    const h = d.history || [], prev = h.length > 1 ? h[h.length - 2] : null;
+    let trend = "";
+    if (prev) {
+      const before = prev.anti / Math.max(1, prev.pro + prev.neutral + prev.anti), now = s.anti / tot;
+      trend = now > before + 0.03 ? " Criticism of government is <b>rising</b>." : now < before - 0.03 ? " Criticism of government is <b>easing</b>." : "";
+    }
+    const lean = s.anti > s.pro * 1.3 ? "leans critical of government" : s.pro > s.anti * 1.3 ? "leans pro-government" : "is fairly balanced";
+    lines.push(["⚖️", `Political coverage ${lean}: ${pct(s.pro, tot)}% pro, ${pct(s.neutral, tot)}% independent, ${pct(s.anti, tot)}% anti.${trend}`]);
+  }
+
+  const v = (d.viral || [])[0];
+  const soc = Object.values(d.top_social || {}).flat().sort((a, b) => b.engagement - a.engagement)[0];
+  const vt = v ? (v.title.length > 55 ? v.title.slice(0, 55) + "…" : v.title) : "";
+  if (v || soc) lines.push(["🔥", [v ? `Top search: <b>${esc(vt[0].toUpperCase() + vt.slice(1))}</b> (${esc(v.traffic)} searches)` : "",
+    soc ? `most-engaged post: ${esc(soc.source)} on ${PLATFORM[soc.platform]} (${short(soc.likes)} likes)` : ""].filter(Boolean).join("; ") + "."]);
+
+  const mk = d.markets;
+  if (mk && mk.indices?.length) {
+    const n = mk.indices.find((q) => q.name === "Nifty 50");
+    const a = mk.analysis, big = (a?.alerts || []).filter((x) => Date.now() / 1000 - x.t < 86400).sort((p, q) => Math.abs(q.size) - Math.abs(p.size))[0];
+    let t = `Markets: <b>${esc(mk.mood.label.toLowerCase())}</b>`;
+    if (n) t += `, Nifty ${Math.abs(n.day ?? 0) < 0.05 ? "flat" : (n.day > 0 ? "up " : "down ") + Math.abs(n.day).toFixed(2) + "%"} (${n.month >= 0 ? "+" : ""}${n.month}% this month)`;
+    if (a?.record?.count && Math.abs(a.record.avg) >= 0.01) t += `; watchlist picks ${a.record.avg >= 0 ? "+" : ""}${a.record.avg}% on average`;
+    if (big) t += `; biggest move: ${esc(big.text)}`;
+    lines.push(["📈", t + "."]);
+  }
+  return `<div class="card brief">
+    <h2>Today's brief</h2>
+    ${lines.map(([ic, t]) => `<div class="bline"><span>${ic}</span><p>${t}</p></div>`).join("")}
+  </div>`;
 }
 
 function sources() {

@@ -150,6 +150,12 @@ main { padding: 0 16px calc(84px + env(safe-area-inset-bottom)); max-width: 1200
 .topic .heads { margin-top: 10px; display: none; }
 .topic.open .heads { display: block; }
 
+/* ---------- today's brief ---------- */
+.brief { margin-bottom: 14px; border-left: 4px solid var(--accent); }
+.brief h2 { font-size: 17px; margin-bottom: 8px; }
+.bline { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 6px; padding: 5px 0; }
+.bline p { margin: 0; font-size: 14.5px; line-height: 1.45; }
+
 /* ---------- stock analysis ---------- */
 .nav button { position: relative; }
 .nav button.badge::after { content: ""; position: absolute; top: 6px; right: calc(50% - 16px); width: 8px; height: 8px;
