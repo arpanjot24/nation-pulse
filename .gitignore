@@ -1,0 +1,4 @@
+__pycache__/
+.claude/
+data/latest.json
+app/data.json
