@@ -17,6 +17,8 @@ const STANCE_SHORT = { pro: "Pro-govt", neutral: "Independent", anti: "Anti-govt
 const EMO = ["joy", "hope", "calm", "fear", "anger", "sadness"];
 const EMO_LABEL = { joy: "Joy", hope: "Hope", calm: "Calm", fear: "Worry", anger: "Anger", sadness: "Sadness" };
 const LANG = { hi: "Hindi", pa: "Punjabi" };
+const PLATFORM = { reddit: "Reddit", instagram: "Instagram", x: "X", facebook: "Facebook" };
+const short = (n) => (n >= 1e7 ? (n / 1e7).toFixed(1) + " Cr" : n >= 1e5 ? (n / 1e5).toFixed(1) + " L" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n || 0));
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const ago = (ts) => {
@@ -88,7 +90,7 @@ function itemHTML(i, showStance = true) {
       ${i.kind && i.kind !== "report" ? `<span class="tag">${i.kind === "analysis" ? "Analysis" : "Opinion"}</span>` : ""}
       <span>${esc(i.source)}</span><span>·</span><span>${ago(i.time)}</span>
       ${i.lang ? `<span class="tag">Translated from ${LANG[i.lang] || "Punjabi"}</span>` : ""}
-      ${i.platform === "reddit" ? `<span class="tag">Reddit</span>` : ""}
+      ${PLATFORM[i.platform] ? `<span class="tag">${PLATFORM[i.platform]}</span>` : ""}
     </div>
     ${showStance ? whyHTML(i) : ""}
   </a>`;
@@ -196,12 +198,31 @@ function sources() {
   const bad = Object.keys(st).filter((k) => k.includes("(error)")).map((k) => k.replace(" (error)", ""));
   return `<div class="note"><b>Sources this round:</b> ${ok.map(([k, v]) => `${esc(k)} (${v})`).join(", ")}
   ${bad.length ? `<br><b>Didn't respond:</b> ${esc(bad.join(", "))} — they'll be retried next refresh.` : ""}
-  <br>Instagram, X and Facebook don't offer free access, so they aren't included.</div>`;
+  ${st["Instagram/X/Facebook"] ? `<br><b>Instagram, X, Facebook:</b> ${esc(st["Instagram/X/Facebook"])}` : ""}
+  ${st["Apify free credit used"] ? ` · free credit used ${esc(st["Apify free credit used"])}` : ""}</div>`;
+}
+
+function socialCard(p, title) {
+  const list = (DATA.top_social || {})[p] || [];
+  return `<div class="card">
+    <h2>${title}</h2><p class="muted">Most liked, commented and shared — collected once a day</p>
+    ${list.length ? list.map((s) => `<a class="social" ${link(s.url)}>
+      ${s.image ? `<img src="${esc(s.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
+      <div><div class="t">${esc(s.title.length > 160 ? s.title.slice(0, 160) + "…" : s.title)}</div>
+        <div class="meta">${s.stance ? `<span class="pill ${s.stance}">${STANCE_SHORT[s.stance]}</span>` : ""}
+          <span>${esc(s.source)}</span><span>·</span><span>${ago(s.time)}</span></div>
+        <div class="eng">❤ ${short(s.likes)} · 💬 ${short(s.comments)} · ↻ ${short(s.shares)}${s.views ? ` · ▶ ${short(s.views)}` : ""}</div>
+      </div></a>`).join("") : `<div class="empty">Not collected yet — appears after the daily update.</div>`}
+  </div>`;
 }
 
 function viral() {
   const tr = DATA.viral || [], rd = DATA.reddit_top || [];
-  return `<div class="grid two">
+  const hasSocial = Object.values(DATA.top_social || {}).some((l) => l.length);
+  return `${hasSocial ? `<div class="grid auto" style="margin-bottom:14px">
+    ${socialCard("x", "Top on X")}${socialCard("instagram", "Top on Instagram")}${socialCard("facebook", "Top on Facebook")}
+  </div>` : ""}
+  <div class="grid two">
     <div class="card">
       <h2>Top Google searches</h2><p class="muted">India, Punjab, Delhi and Chandigarh — English and Punjabi only</p>
       ${tr.length ? tr.map((t, n) => `<a class="trend" ${link(t.news[0]?.url || t.url)}>

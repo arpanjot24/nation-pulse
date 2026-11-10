@@ -451,8 +451,11 @@ def mood_of(items):
 # models: inside GitHub Actions the built-in token works; at home it borrows the `gh` login.
 # Results are cached so each headline is only sent once. If the AI is unavailable, the keyword
 # rules above are used instead.
-AI_URL = "https://models.github.ai/inference/chat/completions"
-AI_MODELS = ["openai/gpt-4.1-mini", "openai/gpt-4o-mini", "meta/Llama-4-Scout-17B-16E-Instruct"]
+AI_ENDPOINTS = [  # (address, model) - tried in order until one answers
+    ("https://models.github.ai/inference/chat/completions", "openai/gpt-4.1-mini"),
+    ("https://models.github.ai/inference/chat/completions", "openai/gpt-4o-mini"),
+    ("https://models.inference.ai.azure.com/chat/completions", "gpt-4o-mini"),
+]
 AI_BATCH = 40
 AI_MAX_CALLS = 10          # per update; free limit is ~150 calls a day
 AI_CACHE_FILE = os.path.join(HERE, "data", "ai_cache.json")
@@ -499,24 +502,31 @@ def ai_token():
 
 def ai_call(text):
     """Send one batch to the AI; tries each model until one answers."""
-    models = [_ai["model"]] if _ai["model"] else AI_MODELS
+    endpoints = [_ai["model"]] if _ai["model"] else AI_ENDPOINTS
     last = None
-    for model in models:
+    for url, model in endpoints:
         body = {"model": model, "temperature": 0,
                 "messages": [{"role": "system", "content": AI_PROMPT}, {"role": "user", "content": text}]}
-        req = urllib.request.Request(AI_URL, data=json.dumps(body).encode("utf-8"), headers={
-            "Authorization": "Bearer " + ai_token(), "Content-Type": "application/json"})
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers={
+            "Authorization": "Bearer " + ai_token(), "Content-Type": "application/json",
+            "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "nation-pulse"})
         try:
             with urllib.request.urlopen(req, timeout=90) as r:
-                out = json.loads(r.read().decode("utf-8"))["choices"][0]["message"]["content"]
-            _ai["model"] = model
+                raw = r.read().decode("utf-8", "replace")
+            try:
+                out = json.loads(raw)["choices"][0]["message"]["content"]
+            except Exception:
+                raise RuntimeError(f"unexpected reply {r.status}: {raw[:120]!r}")
+            _ai["model"] = (url, model)
             return out
         except urllib.error.HTTPError as e:
-            last = f"{model}: HTTP {e.code} {e.read()[:150]!r}"
+            last = (last + " | " if last else "") + f"{model}: HTTP {e.code} {e.read()[:150]!r}"
             if e.code == 429:  # daily/minute limit reached - stop for this round
                 raise RuntimeError(last)
         except Exception as e:
-            last = f"{model}: {e}"
+            last = (last + " | " if last else "") + f"{model}: {str(e)[:150]}"
+    print("AI call failed:", last)
     raise RuntimeError(last)
 
 
@@ -557,7 +567,7 @@ def ai_classify(items, status):
                             "e": r.get("emotion") if r.get("emotion") in EMOTIONS or r.get("emotion") == "calm" else "calm",
                             "r": str(r.get("reason") or "")[:120], "t": int(time.time())}
             except Exception as e:
-                status["AI sorting (error)"] = str(e)[:150]
+                status["AI sorting (error)"] = str(e)[:400]
                 if "429" in str(e) or "401" in str(e) or "403" in str(e):
                     _ai["dead"] = "401" in str(e) or "403" in str(e)
                     break
@@ -577,7 +587,7 @@ def ai_classify(items, status):
         it.update(stance=None if c["s"] == "none" else c["s"], govt=c["g"], kind=c["k"],
                   emotion=c["e"], why=[c["r"]] if c["r"] else [], by="ai")
         done += 1
-    status["AI sorting"] = f"{done} of {len(items)} posts" + (f" ({_ai['model']})" if _ai["model"] else "")
+    status["AI sorting"] = f"{done} of {len(items)} posts" + (f" ({_ai['model'][1]})" if _ai["model"] else "")
     return done
 
 
@@ -687,6 +697,121 @@ def collect_markets(status):
     return out
 
 
+# ---------------------------------------------------------------- Instagram, X, Facebook (Apify free plan)
+# Apify gives $5 of free usage a month. We scrape once a day, small amounts (~$3.25/month),
+# and stop completely once the month's usage passes APIFY_BUDGET_USD.
+APIFY_BUDGET_USD = 4.50
+SOCIAL_EVERY_HOURS = 22
+SOCIAL_CACHE_FILE = os.path.join(HERE, "data", "social_cache.json")
+APIFY_JOBS = [
+    {"name": "Instagram", "platform": "instagram", "actor": "apify~instagram-hashtag-scraper", "max_usd": 0.06,
+     "input": {"hashtags": ["india", "indianpolitics"], "resultsType": "posts", "resultsLimit": 10}},
+    {"name": "Instagram memes", "platform": "instagram", "meme": True, "actor": "apify~instagram-hashtag-scraper",
+     "max_usd": 0.04, "input": {"hashtags": ["indianmemes"], "resultsType": "posts", "resultsLimit": 10}},
+    {"name": "X", "platform": "x", "actor": "kaitoeasyapi~twitter-x-data-tweet-scraper-pay-per-result-cheapest",
+     "max_usd": 0.03, "input": {"searchTerms": ["(Modi OR government OR BJP OR Congress OR opposition) India min_faves:500",
+                                               "Punjab min_faves:100"],
+                                "maxItems": 20, "queryType": "Top", "lang": "en"}},
+    {"name": "Facebook", "platform": "facebook", "actor": "alfalfa~facebook-posts-scraper", "max_usd": 0.04,
+     "input": {"startUrls": [{"url": "https://www.facebook.com/BJP4India"},
+                             {"url": "https://www.facebook.com/INCIndia"},
+                             {"url": "https://www.facebook.com/AamAadmiParty"},
+                             {"url": "https://www.facebook.com/NDTV"},
+                             {"url": "https://www.facebook.com/IndiaToday"}],
+               "resultsLimit": 2, "onlyPostsNewerThan": "2 days"}},
+]
+
+
+def apify(path, token, body=None, timeout=60):
+    url = "https://api.apify.com/v2/" + path
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8") if body is not None else None,
+                                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def num(*vals):
+    for v in vals:
+        if isinstance(v, (int, float)) and v >= 0:
+            return int(v)
+    return 0
+
+
+def social_item(job, r):
+    """Turn one scraped record into the app's common post format."""
+    p = job["platform"]
+    if p == "instagram":
+        text, who = r.get("caption") or "", "@" + (r.get("ownerUsername") or "instagram")
+        likes, comments = num(r.get("likesCount")), num(r.get("commentsCount"))
+        shares, views = num(r.get("sharesCount"), r.get("reshareCount")), num(r.get("videoViewCount"), r.get("videoPlayCount"))
+        image, ts = r.get("displayUrl"), r.get("timestamp")
+    elif p == "x":
+        a = r.get("author") or {}
+        text, who = r.get("text") or "", "@" + (a.get("userName") or "x")
+        likes, comments = num(r.get("likeCount")), num(r.get("replyCount"))
+        shares, views = num(r.get("retweetCount")) + num(r.get("quoteCount")), num(r.get("viewCount"))
+        media = r.get("media") or []
+        image = (media[0].get("media_url_https") or media[0].get("url")) if media and isinstance(media[0], dict) else None
+        ts = r.get("createdAt")
+    else:
+        text, who = r.get("text") or "", r.get("pageName") or (r.get("user") or {}).get("name") or "Facebook"
+        likes, comments = num(r.get("likes"), r.get("topReactionsCount")), num(r.get("comments"))
+        shares, views = num(r.get("shares")), num(r.get("viewsCount"), r.get("videoPostViewCount"))
+        media = r.get("media") or []
+        image = media[0].get("thumbnail") if media and isinstance(media[0], dict) else None
+        ts = r.get("time")
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text and not image:
+        return None
+    t = to_ts(ts) if isinstance(ts, str) else (int(ts) if isinstance(ts, (int, float)) else int(time.time()))
+    return {"title": text[:280] or "(image post)", "source": who, "platform": p, "url": r.get("url"),
+            "image": image, "time": t, "likes": likes, "comments": comments, "shares": shares, "views": views,
+            "engagement": likes + 2 * comments + 3 * shares, "meme": bool(job.get("meme"))}
+
+
+def collect_social(status):
+    """Instagram, X and Facebook via Apify - at most once a day, within the free $5."""
+    try:
+        cache = json.load(open(SOCIAL_CACHE_FILE, encoding="utf-8"))
+    except Exception:
+        cache = {"t": 0, "items": []}
+    token = os.environ.get("APIFY_TOKEN", "").strip()
+    if not token:
+        status["Instagram/X/Facebook"] = "not set up (no Apify token)"
+        return cache["items"]
+    if time.time() - cache.get("t", 0) < SOCIAL_EVERY_HOURS * 3600:
+        status["Instagram/X/Facebook"] = f"{len(cache['items'])} posts (saved, refreshed daily)"
+        return cache["items"]
+    try:
+        lim = apify("users/me/limits", token)["data"]
+        used = float(lim.get("current", {}).get("monthlyUsageUsd") or 0)
+        cap = float(lim.get("limits", {}).get("maxMonthlyUsageUsd") or 5)
+        status["Apify free credit used"] = f"${used:.2f} of ${cap:.2f}"
+        if used >= min(APIFY_BUDGET_USD, cap - 0.4):
+            status["Instagram/X/Facebook"] = "paused - this month's free credit is nearly used up"
+            return cache["items"]
+    except Exception as e:
+        status["Apify (error)"] = str(e)[:100]
+        return cache["items"]
+    items = []
+    for job in APIFY_JOBS:
+        try:
+            path = (f"acts/{job['actor']}/run-sync-get-dataset-items?timeout=240"
+                    f"&maxTotalChargeUsd={job['max_usd']}&maxItems=60")
+            rows = apify(path, token, job["input"], timeout=300)
+            got = [x for x in (social_item(job, r) for r in rows if isinstance(r, dict) and not r.get("error")) if x]
+            items += got
+            status[job["name"]] = len(got)
+        except urllib.error.HTTPError as e:
+            status[job["name"] + " (error)"] = f"HTTP {e.code} {e.read()[:120]!r}"
+        except Exception as e:
+            status[job["name"] + " (error)"] = str(e)[:100]
+    if items:  # only replace the saved copy when we actually got something
+        cache = {"t": int(time.time()), "items": items}
+        json.dump(cache, open(SOCIAL_CACHE_FILE, "w", encoding="utf-8"), ensure_ascii=False)
+    return cache["items"]
+
+
 def outlet_table(items, n=16):
     by = {}
     for it in items:
@@ -705,18 +830,25 @@ STATE = {"data": None, "busy": False}
 
 def build():
     status, t0 = {}, time.time()
-    with ThreadPoolExecutor(4) as ex:
+    with ThreadPoolExecutor(5) as ex:
         f_news = ex.submit(collect_news, status)
         f_trends = ex.submit(collect_trends, status)
         f_reddit = ex.submit(collect_reddit_all, status)
         f_markets = ex.submit(collect_markets, status)
+        f_apify = ex.submit(collect_social, status)
         news = f_news.result()
         trends = f_trends.result()
         memes, social = f_reddit.result()
         markets = f_markets.result()
+        apify_posts = [dict(p) for p in f_apify.result()]
 
     news = [classify(i) for i in translate_items(news)]   # keyword rules first (backup)
-    social = [classify(i) for i in translate_items(social)]
+    big3 = translate_items([p for p in apify_posts if not p.get("meme")])
+    social = [classify(i) for i in translate_items(social)] + [classify(i) for i in big3]
+    insta_memes = translate_items([p for p in apify_posts if p.get("meme") and p.get("image")])
+    for n_, m in enumerate(sorted(insta_memes, key=lambda m: -m["engagement"])):
+        m["rank"] = n_
+    memes = memes + insta_memes
     ai_classify(news + social, status)                       # AI labels replace them where available
     memes = translate_items([m for m in memes if m.get("image")])
     memes.sort(key=lambda m: m["rank"])  # Reddit's own "top today" order
@@ -731,13 +863,16 @@ def build():
     mood = mood_of(everything)
 
     viral = trends[:25]
-    reddit_top = sorted((s for s in social if s["rank"] < 8), key=lambda s: s["rank"])[:20]
+    reddit_top = sorted((s for s in social if s.get("platform") == "reddit" and s["rank"] < 8),
+                        key=lambda s: s["rank"])[:20]
+    top_social = {p: sorted([s for s in social if s.get("platform") == p], key=lambda s: -s["engagement"])[:12]
+                  for p in ("instagram", "x", "facebook")}
 
     data = {
         "updated": int(time.time()), "took": round(time.time() - t0, 1), "status": status,
         "mood": mood,
         "stance": {"pro": stance["pro"], "neutral": stance["neutral"], "anti": stance["anti"]},
-        "viral": viral, "reddit_top": reddit_top,
+        "viral": viral, "reddit_top": reddit_top, "top_social": top_social,
         "memes": memes[:60],
         "political": {k: sorted([i for i in political if i["stance"] == k], key=lambda x: -x["time"])[:60]
                       for k in ("pro", "neutral", "anti")},

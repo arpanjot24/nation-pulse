@@ -37,6 +37,7 @@ jobs:
         run: python server.py --once
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}   # optional: Instagram, X, Facebook via Apify's free plan
 
       - name: Save history (keeps the trend charts going)
         run: |

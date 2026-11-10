@@ -150,6 +150,15 @@ main { padding: 0 16px calc(84px + env(safe-area-inset-bottom)); max-width: 1200
 .topic .heads { margin-top: 10px; display: none; }
 .topic.open .heads { display: block; }
 
+/* ---------- social posts ---------- */
+.social { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+.social:first-of-type { border-top: 0; }
+.social img { width: 64px; height: 64px; object-fit: cover; border-radius: 10px; background: var(--line); }
+.social .t { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.social .meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--muted); margin-top: 3px; }
+.social .eng { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.social > div:only-child { grid-column: 1 / -1; }
+
 /* ---------- markets ---------- */
 .up { color: var(--joy); font-weight: 700; }
 .down { color: var(--anger); font-weight: 700; }
